@@ -1,0 +1,72 @@
+#pragma kernel RunNMS
+
+Buffer<float4> inBoxCoords;
+Buffer<int> inClassIDs;
+Buffer<float4> inBoxCorners;
+Buffer<float> inScores;
+
+AppendStructuredBuffer<float4> outCoords;
+AppendStructuredBuffer<int4> outLabelIDs;
+
+float scoreThreshold;
+float iouThreshold;
+
+float CalculateIoU(float4 boxA, float4 boxB)
+{
+    float inter_x1 = max(boxA.x, boxB.x);
+    float inter_y1 = max(boxA.y, boxB.y);
+    float inter_x2 = min(boxA.z, boxB.z);
+    float inter_y2 = min(boxA.w, boxB.w);
+
+    float inter_w = max(0.0, inter_x2 - inter_x1);
+    float inter_h = max(0.0, inter_y2 - inter_y1);
+    
+    float inter_area = inter_w * inter_h;
+    if (inter_area == 0.0) return 0.0;
+
+    float areaA = (boxA.z - boxA.x) * (boxA.w - boxA.y);
+    float areaB = (boxB.z - boxB.x) * (boxB.w - boxB.y);
+    
+    float union_area = areaA + areaB - inter_area;
+    return inter_area / union_area;
+}
+
+[numthreads(64, 1, 1)]
+void RunNMS(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i >= 8400) return;
+
+    float myScore = inScores[i];
+    if (myScore < scoreThreshold)
+    {
+        return;
+    }
+
+    float4 myBox = inBoxCorners[i];
+    
+    bool suppressed = false;
+    for (uint j = 0; j < 8400; ++j)
+    {
+        if (i == j) continue;
+        
+        float otherScore = inScores[j];
+
+        if (otherScore <= myScore) continue;
+        
+        if (otherScore < scoreThreshold) continue;
+
+        float iou = CalculateIoU(myBox, inBoxCorners[j]);
+        if (iou > iouThreshold)
+        {
+            suppressed = true;
+            break; 
+        }
+    }
+
+    if (!suppressed)
+    {
+        outCoords.Append(inBoxCoords[i]);
+        outLabelIDs.Append(int4(inClassIDs[i], 0, 0, 0));
+    }
+}
